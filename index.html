@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Galaxy Invaders — Jogue no navegador</title>
+<style>
+  :root {color-scheme:dark; font-family:Consolas,'Courier New',monospace;}
+  * {box-sizing:border-box}
+  body {margin:0; min-height:100vh; background:radial-gradient(ellipse at 50% 25%,#172146,#070b19 65%); color:#dce9ff;display:flex;align-items:center;justify-content:center;padding:16px;}
+  .wrap{width:min(100%,1000px);text-align:center}
+  h1{font-size:clamp(22px,3.4vw,34px);margin:0 0 7px;letter-spacing:3px;color:#19dfff;text-shadow:0 0 20px #0097d677}
+  p{margin:0 0 13px;color:#b1c4e9;font-size:13px;line-height:1.6}
+  canvas{width:100%;height:auto;max-height:calc(100vh - 175px);object-fit:contain;display:block;touch-action:none;border:1px solid #3d5c8b;box-shadow:0 0 35px #00ccff22;background:#080b18;border-radius:9px;outline:0}
+  .footer{display:flex;gap:10px;justify-content:space-between;align-items:center;flex-wrap:wrap;color:#8ea5cb;font-size:13px;padding-top:12px}
+  button{background:#112c44;border:1px solid #1baecb;color:#c7f8ff;border-radius:6px;padding:9px 13px;font:inherit;cursor:pointer}
+  button:hover{background:#1a4867}
+  .api-box{margin-top:12px;border:1px solid #38567b;border-radius:9px;background:#0b1429;padding:12px 16px;text-align:left;display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:space-between}
+  .api-details{flex:1 1 300px;min-width:0}
+  .api-box strong{color:#76ebff}
+  .api-box small{display:block;color:#94afcf;margin-top:5px;line-height:1.5}
+  .api-box a{color:#8ceaff}
+  .api-box pre{white-space:pre-wrap;word-break:break-word;font:11px/1.4 Consolas,monospace;color:#afc5e9;margin:8px 0 0}
+  .touch{display:none;gap:6px;justify-content:center;margin-top:10px;flex-wrap:wrap}
+  .touch button{min-width:62px;min-height:45px;user-select:none;touch-action:none}
+  @media (pointer:coarse){.touch{display:flex}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>GALAXY INVADERS</h1>
+  <p>Defenda a galáxia contra naves alienígenas geradas automaticamente! Use <strong>WASD ou setas</strong> para mover e <strong>Espaço</strong> para atirar.</p>
+  <canvas id="game" width="900" height="650" tabindex="0" role="img" aria-label="Jogo Galaxy Invaders"></canvas>
+  <div class="footer"><span>WASD / SETAS: mover · ESPAÇO: atirar · R: reiniciar</span><button id="restart">↻ Reiniciar jogo</button></div>
+  <div class="api-box" aria-live="polite">
+    <div class="api-details"><strong id="api-status">API SWAPI: conectando...</strong>
+    <small>Integração REST real: <a href="https://swapi.info/api/starships" target="_blank" rel="noopener noreferrer">GET /api/starships</a> · modelos e velocidades dos inimigos.</small>
+    <small id="api-last">Última nave: aguardando dados...</small>
+    <pre id="api-example" hidden></pre></div>
+    <button id="api-reload" type="button">↻ Consultar API</button>
+  </div>
+  <div class="touch"><button data-key="arrowleft">◀</button><button data-key="arrowup">▲</button><button data-key="arrowdown">▼</button><button data-key="arrowright">▶</button><button data-key="space">ATIRAR</button></div>
+</div>
+<script>
+(() => {
+  'use strict';
+  const canvas=document.getElementById('game'), c=canvas.getContext('2d');
+  const W=900,H=650;
+  c.imageSmoothingEnabled=false;
+  const NAVE=['00000100000','00011111000','00111111100','01111111110','11111111111','11101110111','00101110100','00101110100','00001010000','00011111000'];
+  const colors=['#ff477e','#b967ff','#ff9f43','#55efc4'];
+  const API_URL='https://swapi.info/api/starships';
+  const apiStatus=document.getElementById('api-status');
+  const apiLast=document.getElementById('api-last');
+  const apiExample=document.getElementById('api-example');
+  let starships=[];
+  let apiConnected=false;
+  let lastLoad=0;
+
+  // Integração externa real. Um GET por carregamento (ou clique em consultar).
+  // Tratamento de erro: sem acesso à rede, a geração procedural continua funcionando.
+  async function loadStarships(){
+    const request=++lastLoad;
+    apiStatus.textContent='API SWAPI: consultando servidor...';
+    const controller=new AbortController();
+    const timeout=setTimeout(()=>controller.abort(),12000);
+    try {
+      const response=await fetch(API_URL,{method:'GET',signal:controller.signal});
+      if(!response.ok)throw new Error('HTTP '+response.status);
+      const payload=await response.json();
+      // swapi.info entrega array; outros espelhos podem usar results.
+      const items=Array.isArray(payload)?payload:(Array.isArray(payload.results)?payload.results:[]);
+      const cleaned=items.filter(x=>x && typeof x.name==='string' && x.name.trim());
+      if(!cleaned.length)throw new Error('Resposta da API sem naves válidas');
+      if(request!==lastLoad)return;
+      starships=cleaned;
+      apiConnected=true;
+      apiStatus.textContent='API SWAPI: CONECTADA · '+starships.length+' modelos recebidos';
+      const example=starships.find(x=>Number.isFinite(Number(x.MGLT)))||starships[0];
+      apiExample.hidden=false;
+      apiExample.textContent='Exemplo de JSON: '+JSON.stringify({name:example.name,starship_class:example.starship_class,MGLT:example.MGLT},null,2);
+      apiLast.textContent='Próximos inimigos utilizarão os dados recebidos da API.';
+    }catch(err){
+      if(request!==lastLoad)return;
+      // Falha não é disfarçada: aparece explicitamente na interface.
+      starships=[];
+      apiConnected=false;
+      apiStatus.textContent='API SWAPI: indisponível · modo procedural local';
+      apiLast.textContent='Erro: '+(err.name==='AbortError'?'tempo de resposta excedido':err.message)+'. Clique em Consultar API para tentar novamente.';
+      apiExample.hidden=true;
+    }finally{clearTimeout(timeout);}
+  }
+  function stableHash(value){let h=0;for(const char of String(value||''))h=((h*31)+char.charCodeAt(0))|0;return Math.abs(h);}
+
+  const held=new Set();
+  let game, last=0;
+  const random=(min,max)=>min+Math.random()*(max-min);
+  function reset(){
+    game={score:0,lives:3,frame:0,cooldown:0,active:true,ship:{x:425,y:510,w:55,h:50},shots:[],enemies:[],particles:[],stars:Array.from({length:110},()=>({x:random(0,W),y:random(0,H),size:[2,2,3,4][Math.floor(random(0,4))],tone:['#ffffff','#8da8d8','#5d77a8'][Math.floor(random(0,3))]}))};
+    held.clear(); canvas.focus();
+  }
+  function art(matrix,x,y,color,scale=5){
+    c.fillStyle=color;
+    matrix.forEach((row,i)=>{for(let j=0;j<row.length;j++){if(row[j]==='1')c.fillRect(Math.round(x+j*scale),Math.round(y+i*scale),scale,scale);}});
+  }
+  function hit(a,b){return a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y;}
+  function burst(x,y){for(let i=0;i<8;i++)game.particles.push({x:x+random(-12,12),y:y+random(-12,12),vx:random(-2.4,2.4),vy:random(-2.4,2.4),life:12,color:colors[Math.floor(random(0,colors.length))]});}
+  function shoot(){const s=game.ship;game.shots.push({x:s.x+s.w/2-3,y:s.y-17,w:6,h:17});game.cooldown=9;}
+// Cria naves alienigenas diferentes SEM rede, sem API e sem chave secreta.
+// Cada nave recebe sua matriz 13x9 e sprite proprio no instante em que nasce.
+const alienShapes = [
+  [0,1,3,5,6,5,4,2,0], // interceptor
+  [2,3,5,6,5,5,3,2,0], // disco voador
+  [1,2,4,5,6,6,5,4,1], // encouracado
+  [0,1,5,6,4,6,3,1,0], // lanceta
+  [2,4,6,6,6,5,4,3,2], // cruzador
+  [1,3,6,4,6,5,6,2,0]  // aranha estelar
+];
+const alienPalettes = [
+  ['#f64e82','#ffb1d0','#7d2754','#fff185','#d4faff'],
+  ['#ab69ff','#d9b9ff','#502b95','#54f8ff','#fff5bd'],
+  ['#ff9d42','#ffda94','#86411c','#80f8fe','#fff0b3'],
+  ['#40d8b3','#b7ffe7','#147562','#ffde62','#e6ffff'],
+  ['#ff665b','#ffb2a4','#902e39','#fff2a7','#9ef5ff'],
+  ['#519dff','#bcdeff','#234b91','#ffcce6','#e0faff']
+];
+function createAlienSprite(model){
+  // A classe/nome da nave vêm da API e influenciam o sprite criado localmente.
+  const profile=alienShapes[model ? stableHash(model.starship_class||model.name)%alienShapes.length : Math.floor(random(0,alienShapes.length))];
+  const palette=alienPalettes[model ? stableHash(model.name)%alienPalettes.length : Math.floor(random(0,alienPalettes.length))];
+  const cells=Array.from({length:9},()=>Array(13).fill('0'));
+  const setMirror=(row,d,value)=>{cells[row][6-d]=value;cells[row][6+d]=value;};
+  for(let row=0;row<9;row++){
+    const variation=(row>0&&row<8&&Math.random()<0.42)?(Math.random()<0.5?-1:1):0;
+    const half=Math.max(0,Math.min(6,profile[row]+variation));
+    for(let d=0;d<=half;d++){
+      let pixel=row<3?'2':row>5?'3':'1';
+      if(d>=Math.max(1,half-1))pixel='3';
+      if(d>=3&&row>=2&&row<=6&&Math.random()<0.19)pixel='0';
+      setMirror(row,d,pixel);
+    }
+  }
+  // Cabine brilhante e antenas, no centro da nave.
+  const cockpitRow=Math.random()<0.5?3:4;
+  cells[cockpitRow-1][6]='4';
+  setMirror(cockpitRow,1,'4');
+  cells[cockpitRow][6]='4';
+  // Luzes e motores nas asas; simetria mantida.
+  const wingRow=3+Math.floor(random(0,3));
+  const wingOffset=3+Math.floor(random(0,3));
+  setMirror(wingRow,wingOffset,'5');
+  const thrusterOffset=Math.random()<0.5?1:2;
+  setMirror(7,thrusterOffset,'5');
+  const sprite=document.createElement('canvas');
+  sprite.width=65;sprite.height=45;
+  const pixels=sprite.getContext('2d');
+  for(let y=0;y<9;y++)for(let x=0;x<13;x++){
+    const index=Number(cells[y][x]);
+    if(index){pixels.fillStyle=palette[index-1];pixels.fillRect(x*5,y*5,5,5);}
+  }
+  return sprite;
+}
+function createEnemy(){
+  const model=starships.length?starships[Math.floor(random(0,starships.length))]:null;
+  // MGLT é uma medida fictícia de velocidade de naves em Star Wars.
+  // Traduzimos esse atributo para pixels por quadro, respeitando o limite do jogo.
+  const mglt=model?Number(String(model.MGLT||'').replace(/,/g,'')):NaN;
+  const base=Number.isFinite(mglt)&&mglt>0?1.7+mglt/55:2;
+  const speed=Math.min(7,base+Math.floor(game.score/150)*0.5);
+  game.enemies.push({x:random(50,W-115),y:155,w:65,h:45,speed,sprite:createAlienSprite(model),name:model?model.name:'Alienígena procedural'});
+  if(model){
+    apiLast.textContent='Última nave: '+model.name+' · classe: '+(model.starship_class||'não informada')+' · MGLT: '+(model.MGLT||'n/d')+' · velocidade jogo: '+speed.toFixed(1);
+  } else if(!apiConnected){
+    apiLast.textContent='Última nave: modelo procedural local (a API não está conectada).';
+  }
+}
+  function loseLife(){game.lives--;if(game.lives<=0){game.lives=0;game.active=false;held.clear();}}
+  function update(step){
+    if(!game.active)return;
+    game.frame+=step;
+    const ship=game.ship, sp=7*step;
+    let dx=0,dy=0;
+    if(held.has('arrowleft')||held.has('a'))dx--;
+    if(held.has('arrowright')||held.has('d'))dx++;
+    if(held.has('arrowup')||held.has('w'))dy--;
+    if(held.has('arrowdown')||held.has('s'))dy++;
+    if(dx&&dy){dx*=Math.SQRT1_2;dy*=Math.SQRT1_2;}
+    ship.x=Math.max(10,Math.min(W-10-ship.w,ship.x+dx*sp));
+    ship.y=Math.max(150,Math.min(H-45-ship.h,ship.y+dy*sp));
+    game.cooldown-=step;
+    if(held.has('space')&&game.cooldown<=0)shoot();
+    game.stars.forEach(s=>{s.y+=step;if(s.y>H){s.y=0;s.x=random(0,W);}});
+    const interval=Math.max(18,48-Math.floor(game.score/100));
+    if(Math.floor(game.frame/interval)!==Math.floor((game.frame-step)/interval))createEnemy();
+    for(let i=game.shots.length-1;i>=0;i--){let s=game.shots[i];s.y-=12*step;if(s.y+s.h<140)game.shots.splice(i,1);}
+    for(let i=game.enemies.length-1;i>=0;i--){
+      let e=game.enemies[i];e.y+=e.speed*step;
+      if(e.y>H){game.enemies.splice(i,1);loseLife();continue;}
+      if(hit(e,ship)){burst(e.x+e.w/2,e.y+e.h/2);game.enemies.splice(i,1);loseLife();}
+    }
+    // Cada tiro destrói somente um inimigo, como no código Python original.
+    for(let i=game.shots.length-1;i>=0;i--){
+      const shot=game.shots[i];let struck=false;
+      for(let j=game.enemies.length-1;j>=0;j--){
+        const enemy=game.enemies[j];
+        if(hit(shot,enemy)){burst(enemy.x+enemy.w/2,enemy.y+enemy.h/2);game.enemies.splice(j,1);game.score+=10;struck=true;break;}
+      }
+      if(struck)game.shots.splice(i,1);
+    }
+    game.particles.forEach(p=>{p.x+=p.vx*step;p.y+=p.vy*step;p.life-=step;});
+    game.particles=game.particles.filter(p=>p.life>0);
+  }
+  function text(txt,x,y,color,size,align='left',weight='bold'){
+    c.fillStyle=color;c.font=`${weight} ${size}px Consolas, monospace`;c.textAlign=align;c.fillText(txt,x,y);
+  }
+  function render(){
+    c.fillStyle='#080b18';c.fillRect(0,0,W,H);
+    game.stars.forEach(s=>{c.fillStyle=s.tone;c.fillRect(s.x,s.y,s.size,s.size);});
+    c.fillStyle='#00e5ff';[[100,160],[760,200],[650,420],[220,500]].forEach(([x,y])=>c.fillRect(x,y,4,4));
+    c.fillStyle='#10172c';c.fillRect(0,0,W,75);
+    text('GALAXY INVADERS',450,38,'#00e5ff',29,'center');
+    text('DEFENDA A GALAXIA  |  NAVES ALEATORIAS',450,59,'#7186b5',11,'center');
+    text('SCORE: '+String(game.score).padStart(4,'0'),40,117,'#ffe66d',19);
+    text('VIDAS: '+game.lives,860,117,'#ff5277',19,'right');
+    c.strokeStyle='#263653';c.lineWidth=2;c.beginPath();c.moveTo(25,135);c.lineTo(875,135);c.stroke();
+    art(NAVE,game.ship.x,game.ship.y,'#00d9ff');
+    c.fillStyle='#fff';c.fillRect(game.ship.x+25,game.ship.y+15,5,10);
+    game.shots.forEach(s=>{c.fillStyle='#ffe66d';c.fillRect(s.x,s.y+5,6,12);c.fillStyle='#fff';c.fillRect(s.x+2,s.y,2,5);});
+    game.enemies.forEach(e=>c.drawImage(e.sprite,Math.round(e.x),Math.round(e.y)));
+    game.particles.forEach(p=>{c.fillStyle=p.color;c.fillRect(p.x,p.y,5,5);});
+    text('WASD / SETAS: MOVIMENTAR    |    ESPACO: ATIRAR',450,630,'#7186b5',13,'center');
+    if(!game.active){
+      c.fillStyle='#111a30';c.fillRect(170,210,560,220);
+      c.strokeStyle='#ff477e';c.lineWidth=3;c.strokeRect(170,210,560,220);
+      text('GAME OVER',450,294,'#ff477e',43,'center');
+      text('PONTUACAO FINAL: '+game.score,450,344,'#ffe66d',23,'center');
+      text('PRESSIONE R PARA REINICIAR',450,386,'#00e5ff',16,'center');
+    }
+  }
+  function loop(timestamp){
+    const step=last?Math.min((timestamp-last)/16.667,2):1;
+    last=timestamp;
+    update(step);render();requestAnimationFrame(loop);
+  }
+  function normalize(key){return key===' '?'space':key.toLowerCase();}
+  document.addEventListener('keydown',e=>{
+    const key=normalize(e.key);
+    if(['space','arrowup','arrowdown','arrowleft','arrowright'].includes(key))e.preventDefault();
+    if(key==='r'&&!game.active)reset();
+    if(['space','arrowup','arrowdown','arrowleft','arrowright','a','s','d','w'].includes(key))held.add(key);
+  });
+  document.addEventListener('keyup',e=>held.delete(normalize(e.key)));
+  window.addEventListener('blur',()=>held.clear());
+  document.getElementById('restart').addEventListener('click',reset);
+  document.getElementById('api-reload').addEventListener('click',loadStarships);
+  document.querySelectorAll('[data-key]').forEach(b=>{
+    const k=b.dataset.key;
+    b.addEventListener('pointerdown',e=>{e.preventDefault();held.add(k);b.setPointerCapture(e.pointerId);});
+    for(const ev of ['pointerup','pointercancel','lostpointercapture'])b.addEventListener(ev,()=>held.delete(k));
+  });
+  reset();loadStarships();requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
